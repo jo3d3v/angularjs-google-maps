@@ -524,8 +524,8 @@ angular.module('ngMap', []);
                     if (!_this.getProjection() || typeof _this.position.lng !== 'function') {
                         return;
                     }
-                    var offsetX = _this.el.hasOwnProperty('offsetX') ? _this.el.markerOffsetX : 0;
-                    var offsetY = _this.el.hasOwnProperty('offsetY') ? _this.el.markerOffsetX : 0;
+                    var offsetX = _this.el.hasOwnProperty('offsetX') ? _this.offsetX : 0;
+                    var offsetY = _this.el.hasOwnProperty('offsetY') ? _this.offsetX : 0;
                     var posPixel = _this.getProjection().fromLatLngToDivPixel(_this.position);
                     var x = Math.round(posPixel.x - offsetX);
                     var y = Math.round(posPixel.y - offsetY);
