@@ -23,10 +23,27 @@
     return map;
   };
 
-  var find = function(el) { //jshint ignore:line
+  var findById = function(el, id) {
     var notInUseMap;
     for (var i=0; i<mapInstances.length; i++) {
       var map = mapInstances[i];
+      if (map.id == id && !map.inUse) {
+        var mapDiv = map.getDiv();
+        el.appendChild(mapDiv);
+        notInUseMap = map;
+        break;
+      }
+    }
+    return notInUseMap;
+  };
+
+  var findUnused = function(el) { //jshint ignore:line
+    var notInUseMap;
+    for (var i=0; i<mapInstances.length; i++) {
+      var map = mapInstances[i];
+      if (map.id) {
+        continue;
+      }
       if (!map.inUse) {
         var mapDiv = map.getDiv();
         el.appendChild(mapDiv);
@@ -44,7 +61,7 @@
    * @return map instance for the given element
    */
   var getMapInstance = function(el) {
-    var map = find(el);
+    var map = findById(el, el.id) || findUnused(el);
     if (!map) {
       map = add(el);
     } else {
@@ -79,6 +96,20 @@
     }
     mapInstances = [];
   };
+  
+  /**
+   * @memberof NgMapPool
+   * @function deleteMapInstance
+   * @desc delete a mapInstance
+   */
+  var deleteMapInstance= function(mapId) {
+	  for( var i=0; i<mapInstances.length; i++ ) {
+		  if( (mapInstances[i] !== null) && (mapInstances[i].id == mapId)) {
+			  mapInstances[i]= null;
+			  mapInstances.splice( i, 1 );
+		  }
+	  }
+  };
 
   var NgMapPool = function(_$document_, _$window_, _$timeout_) {
     $document = _$document_[0], $window = _$window_, $timeout = _$timeout_;
@@ -87,9 +118,11 @@
 	  mapInstances: mapInstances,
       resetMapInstances: resetMapInstances,
       getMapInstance: getMapInstance,
-      returnMapInstance: returnMapInstance
+      returnMapInstance: returnMapInstance,
+      deleteMapInstance: deleteMapInstance
     };
   };
+
   NgMapPool.$inject = [ '$document', '$window', '$timeout'];
 
   angular.module('ngMap').factory('NgMapPool', NgMapPool);

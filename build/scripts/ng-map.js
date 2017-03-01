@@ -1,5 +1,14 @@
+(function(root, factory) {
+if (typeof exports === "object") {
+module.exports = factory(require('angular'));
+} else if (typeof define === "function" && define.amd) {
+define(['angular'], factory);
+} else{
+factory(root.angular);
+}
+}(this, function(angular) {
 /**
- * AngularJS Google Maps Ver. 1.16.8
+ * AngularJS Google Maps Ver. 1.18.0
  *
  * The MIT License (MIT)
  * 
@@ -33,13 +42,16 @@ angular.module('ngMap', []);
   var Attr2MapOptions;
 
   var __MapController = function(
-      $scope, $element, $attrs, $parse, _Attr2MapOptions_, NgMap, NgMapPool
+      $scope, $element, $attrs, $parse, $interpolate, _Attr2MapOptions_, NgMap, NgMapPool, escapeRegExp
     ) {
     Attr2MapOptions = _Attr2MapOptions_;
     var vm = this;
+    var exprStartSymbol = $interpolate.startSymbol();
+    var exprEndSymbol = $interpolate.endSymbol();
 
     vm.mapOptions; /** @memberof __MapController */
     vm.mapEvents;  /** @memberof __MapController */
+    vm.eventListeners;  /** @memberof __MapController */
 
     /**
      * Add an object to the collection of group
@@ -120,14 +132,21 @@ angular.module('ngMap', []);
      * @function zoomToIncludeMarkers
      */
     vm.zoomToIncludeMarkers = function() {
-      var bounds = new google.maps.LatLngBounds();
-      for (var k1 in vm.map.markers) {
-        bounds.extend(vm.map.markers[k1].getPosition());
+      // Only fit to bounds if we have any markers
+      // object.keys is supported in all major browsers (IE9+)
+      if ((vm.map.markers != null && Object.keys(vm.map.markers).length > 0) || (vm.map.customMarkers != null && Object.keys(vm.map.customMarkers).length > 0)) {
+        var bounds = new google.maps.LatLngBounds();
+        for (var k1 in vm.map.markers) {
+          bounds.extend(vm.map.markers[k1].getPosition());
+        }
+        for (var k2 in vm.map.customMarkers) {
+          bounds.extend(vm.map.customMarkers[k2].getPosition());
+        }
+    	  if (vm.mapOptions.maximumZoom) {
+    		  vm.enableMaximumZoomCheck = true; //enable zoom check after resizing for markers
+    	  }
+        vm.map.fitBounds(bounds);
       }
-      for (var k2 in vm.map.customMarkers) {
-        bounds.extend(vm.map.customMarkers[k2].getPosition());
-      }
-      vm.map.fitBounds(bounds);
     };
 
     /**
@@ -165,7 +184,7 @@ angular.module('ngMap', []);
 
         /**
          * rebuild mapOptions for lazyInit
-         * becasue attributes values might have been changed
+         * because attributes values might have been changed
          */
         var filtered = Attr2MapOptions.filter($attrs);
         var options = Attr2MapOptions.getOptions(filtered);
@@ -188,10 +207,16 @@ angular.module('ngMap', []);
       // set options
       mapOptions.zoom = mapOptions.zoom || 15;
       var center = mapOptions.center;
+      var exprRegExp = new RegExp(escapeRegExp(exprStartSymbol) + '.*' + escapeRegExp(exprEndSymbol));
+
       if (!mapOptions.center ||
-        ((typeof center === 'string') && center.match(/\{\{.*\}\}/))
+        ((typeof center === 'string') && center.match(exprRegExp))
       ) {
         mapOptions.center = new google.maps.LatLng(0, 0);
+      } else if( (typeof center === 'string') && center.match(/^[0-9.-]*,[0-9.-]*$/) ){
+        var lat = parseFloat(center.split(',')[0]);
+        var lng = parseFloat(center.split(',')[1]);
+        mapOptions.center = new google.maps.LatLng(lat, lng);
       } else if (!(center instanceof google.maps.LatLng)) {
         var geoCenter = mapOptions.center;
         delete mapOptions.center;
@@ -210,7 +235,9 @@ angular.module('ngMap', []);
 
       // set events
       for (var eventName in mapEvents) {
-        google.maps.event.addListener(vm.map, eventName, mapEvents[eventName]);
+        var event = mapEvents[eventName];
+        var listener = google.maps.event.addListener(vm.map, eventName, event);
+        vm.eventListeners[eventName] = listener;
       }
 
       // set observers
@@ -233,6 +260,18 @@ angular.module('ngMap', []);
           $parse($attrs.mapInitialized)($scope, {map: vm.map});
         }
       });
+
+	  //add maximum zoom listeners if zoom-to-include-markers and and maximum-zoom are valid attributes
+	  if (mapOptions.zoomToIncludeMarkers && mapOptions.maximumZoom) {
+	    google.maps.event.addListener(vm.map, 'zoom_changed', function() {
+          if (vm.enableMaximumZoomCheck == true) {
+			vm.enableMaximumZoomCheck = false;
+	        google.maps.event.addListenerOnce(vm.map, 'bounds_changed', function() {
+		      vm.map.setZoom(Math.min(mapOptions.maximumZoom, vm.map.getZoom()));
+		    });
+	  	  }
+	    });
+	  }
     };
 
     $scope.google = google; //used by $scope.eval to avoid eval()
@@ -251,9 +290,21 @@ angular.module('ngMap', []);
 
     vm.mapOptions = mapOptions;
     vm.mapEvents = mapEvents;
+    vm.eventListeners = {};
 
     if (options.lazyInit) { // allows controlled initialization
-      vm.map = {id: $attrs.id}; //set empty, not real, map
+      // parse angular expression for dynamic ids
+      if (!!$attrs.id &&
+      	  // starts with, at position 0
+	  $attrs.id.indexOf(exprStartSymbol, 0) === 0 &&
+	  // ends with
+	  $attrs.id.indexOf(exprEndSymbol, $attrs.id.length - exprEndSymbol.length) !== -1) {
+        var idExpression = $attrs.id.slice(2,-2);
+        var mapId = $parse(idExpression)($scope);
+      } else {
+        var mapId = $attrs.id;
+      }
+      vm.map = {id: mapId}; //set empty, not real, map
       NgMap.addMap(vm);
     } else {
       vm.initializeMap();
@@ -271,7 +322,7 @@ angular.module('ngMap', []);
   }; // __MapController
 
   __MapController.$inject = [
-    '$scope', '$element', '$attrs', '$parse', 'Attr2MapOptions', 'NgMap', 'NgMapPool'
+    '$scope', '$element', '$attrs', '$parse', '$interpolate', 'Attr2MapOptions', 'NgMap', 'NgMapPool', 'escapeRegexpFilter'
   ];
   angular.module('ngMap').controller('__MapController', __MapController);
 })();
@@ -362,9 +413,9 @@ angular.module('ngMap', []);
  */
 (function() {
   'use strict';
-  var parser, $compile, NgMap;
+  var parser, NgMap;
 
-  var linkFunc = function(scope, element, attrs, mapController) {
+  var linkFunc = function(scope, element, attrs, mapController, $transclude) {
     mapController = mapController[0]||mapController[1];
     var filtered = parser.filter(attrs);
     var options = parser.getOptions(filtered, {scope: scope});
@@ -374,7 +425,8 @@ angular.module('ngMap', []);
      * build a custom control element
      */
     var customControlEl = element[0].parentElement.removeChild(element[0]);
-    $compile(customControlEl.innerHTML.trim())(scope);
+    var content = $transclude();
+    content.appendTo(customControlEl);
 
     /**
      * set events
@@ -392,16 +444,17 @@ angular.module('ngMap', []);
     });
   };
 
-  var customControl =  function(Attr2MapOptions, _$compile_, _NgMap_)  {
-    parser = Attr2MapOptions, $compile = _$compile_, NgMap = _NgMap_;
+  var customControl =  function(Attr2MapOptions, _NgMap_)  {
+    parser = Attr2MapOptions, NgMap = _NgMap_;
 
     return {
       restrict: 'E',
       require: ['?^map','?^ngMap'],
-      link: linkFunc
+      link: linkFunc,
+      transclude: true
     }; // return
   };
-  customControl.$inject = ['Attr2MapOptions', '$compile', 'NgMap'];
+  customControl.$inject = ['Attr2MapOptions', 'NgMap'];
 
   angular.module('ngMap').directive('customControl', customControl);
 })();
@@ -471,18 +524,19 @@ angular.module('ngMap', []);
 
     CustomMarker.prototype.setPosition = function(position) {
       position && (this.position = position); /* jshint ignore:line */
-
+      var _this = this;
       if (this.getProjection() && typeof this.position.lng == 'function') {
-        var posPixel = this.getProjection().fromLatLngToDivPixel(this.position);
-        var _this = this;
+        void 0;
         var setPosition = function() {
+          if (!_this.getProjection()) { return; }
+          var posPixel = _this.getProjection().fromLatLngToDivPixel(_this.position);
           var x = Math.round(posPixel.x - (_this.el.offsetWidth/2));
           var y = Math.round(posPixel.y - _this.el.offsetHeight - 10); // 10px for anchor
           _this.el.style.left = x + "px";
           _this.el.style.top = y + "px";
           _this.el.style.visibility = "visible";
         };
-        if (_this.el.offsetWidth && _this.el.offsetHeight) { 
+        if (_this.el.offsetWidth && _this.el.offsetHeight) {
           setPosition();
         } else {
           //delayed left/top calculation when width/height are not set instantly
@@ -494,6 +548,10 @@ angular.module('ngMap', []);
     CustomMarker.prototype.setZIndex = function(zIndex) {
       zIndex && (this.zIndex = zIndex); /* jshint ignore:line */
       this.el.style.zIndex = this.zIndex;
+    };
+
+    CustomMarker.prototype.getVisible = function() {
+      return this.visible;
     };
 
     CustomMarker.prototype.setVisible = function(visible) {
@@ -590,10 +648,14 @@ angular.module('ngMap', []);
 
 
   var customMarkerDirective = function(
-      Attr2MapOptions, _NgMap_
+      $interpolate, Attr2MapOptions, _NgMap_, escapeRegExp
     )  {
     parser = Attr2MapOptions;
     NgMap = _NgMap_;
+
+    var exprStartSymbol = $interpolate.startSymbol();
+    var exprEndSymbol = $interpolate.endSymbol();
+    var exprRegExp = new RegExp(escapeRegExp(exprStartSymbol) + '([^' + exprEndSymbol.substring(0, 1) + ']+)' + escapeRegExp(exprEndSymbol), 'g');
 
     return {
       restrict: 'E',
@@ -602,15 +664,15 @@ angular.module('ngMap', []);
         setCustomMarker();
         element[0].style.display ='none';
         var orgHtml = element.html();
-        var matches = orgHtml.match(/{{([^}]+)}}/g);
+        var matches = orgHtml.match(exprRegExp);
         var varsToWatch = [];
         //filter out that contains '::', 'this.'
         (matches || []).forEach(function(match) {
-          var toWatch = match.replace('{{','').replace('}}','');
+          var toWatch = match.replace(exprStartSymbol,'').replace(exprEndSymbol,'');
           if (match.indexOf('::') == -1 &&
             match.indexOf('this.') == -1 &&
             varsToWatch.indexOf(toWatch) == -1) {
-            varsToWatch.push(match.replace('{{','').replace('}}',''));
+            varsToWatch.push(match.replace(exprStartSymbol,'').replace(exprEndSymbol,''));
           }
         });
 
@@ -619,7 +681,7 @@ angular.module('ngMap', []);
     }; // return
   };// function
   customMarkerDirective.$inject =
-    ['Attr2MapOptions', 'NgMap'];
+    ['$interpolate', 'Attr2MapOptions', 'NgMap', 'escapeRegexpFilter'];
 
   angular.module('ngMap').directive('customMarker', customMarkerDirective);
 })();
@@ -957,6 +1019,9 @@ angular.module('ngMap', []);
 
         var layer = getLayer(options, events);
         mapController.addObject('fusionTablesLayers', layer);
+        element.bind('$destroy', function() {
+          mapController.deleteObject('fusionTablesLayers', layer);
+        });
       }
      }; // return
   }]);
@@ -1067,7 +1132,7 @@ angular.module('ngMap', []);
 (function() {
   'use strict';
 
-  var infoWindow = function(Attr2MapOptions, $compile, $timeout, $parse, NgMap)  {
+  var infoWindow = function(Attr2MapOptions, $compile, $q, $templateRequest, $timeout, $parse, NgMap)  {
     var parser = Attr2MapOptions;
 
     var getInfoWindow = function(options, events, element) {
@@ -1091,31 +1156,46 @@ angular.module('ngMap', []);
       }
 
       /**
-       * set template ane template-relate functions
+       * set template and template-related functions
        * it must have a container element with ng-non-bindable
        */
-      var template = element.html().trim();
-      if (angular.element(template).length != 1) {
-        throw "info-window working as a template must have a container";
-      }
-      infoWindow.__template = template.replace(/\s?ng-non-bindable[='"]+/,"");
+      var templatePromise = $q(function(resolve) {
+        if (angular.isString(element)) {
+          $templateRequest(element).then(function (requestedTemplate) {
+            resolve(angular.element(requestedTemplate).wrap('<div>').parent());
+          }, function(message) {
+            throw "info-window template request failed: " + message;
+          });
+        }
+        else {
+          resolve(element);
+        }
+      }).then(function(resolvedTemplate) {
+        var template = resolvedTemplate.html().trim();
+        if (angular.element(template).length != 1) {
+          throw "info-window working as a template must have a container";
+        }
+        infoWindow.__template = template.replace(/\s?ng-non-bindable[='"]+/,"");
+      });
 
       infoWindow.__open = function(map, scope, anchor) {
-        $timeout(function() {
-          anchor && (scope.anchor = anchor);
-          var el = $compile(infoWindow.__template)(scope);
-          infoWindow.setContent(el[0]);
-          scope.$apply();
-          if (anchor && anchor.getPosition) {
-            infoWindow.open(map, anchor);
-          } else if (anchor && anchor instanceof google.maps.LatLng) {
-            infoWindow.open(map);
-            infoWindow.setPosition(anchor);
-          } else {
-            infoWindow.open(map);
-          }
-          var infoWindowContainerEl = infoWindow.content.parentElement.parentElement.parentElement;
-          infoWindowContainerEl.className = "ng-map-info-window";
+        templatePromise.then(function() {
+          $timeout(function() {
+            anchor && (scope.anchor = anchor);
+            var el = $compile(infoWindow.__template)(scope);
+            infoWindow.setContent(el[0]);
+            scope.$apply();
+            if (anchor && anchor.getPosition) {
+              infoWindow.open(map, anchor);
+            } else if (anchor && anchor instanceof google.maps.LatLng) {
+              infoWindow.open(map);
+              infoWindow.setPosition(anchor);
+            } else {
+              infoWindow.open(map);
+            }
+            var infoWindowContainerEl = infoWindow.content.parentElement.parentElement.parentElement;
+            infoWindowContainerEl.className = "ng-map-info-window";
+          });
         });
       };
 
@@ -1132,11 +1212,11 @@ angular.module('ngMap', []);
       var options = parser.getOptions(filtered, {scope: scope});
       var events = parser.getEvents(scope, filtered);
 
+      var infoWindow = getInfoWindow(options, events, options.template || element);
       var address;
       if (options.position && !(options.position instanceof google.maps.LatLng)) {
         address = options.position;
       }
-      var infoWindow = getInfoWindow(options, events, element);
       if (address) {
         NgMap.getGeoLocation(address).then(function(latlng) {
           infoWindow.setPosition(latlng);
@@ -1149,7 +1229,7 @@ angular.module('ngMap', []);
       mapController.addObject('infoWindows', infoWindow);
       mapController.observeAttrSetObj(orgAttrs, attrs, infoWindow);
 
-      mapController.showInfoWindow = 
+      mapController.showInfoWindow =
       mapController.map.showInfoWindow = mapController.showInfoWindow ||
         function(p1, p2, p3) { //event, id, marker
           var id = typeof p1 == 'string' ? p1 : p2;
@@ -1193,7 +1273,8 @@ angular.module('ngMap', []);
       scope.showInfoWindow = mapController.map.showInfoWindow;
       scope.hideInfoWindow = mapController.map.hideInfoWindow;
 
-      NgMap.getMap().then(function(map) {
+      var map = infoWindow.mapId ? {id:infoWindow.mapId} : 0;
+      NgMap.getMap(map).then(function(map) {
         infoWindow.visible && infoWindow.__open(map, scope);
         if (infoWindow.visibleOnMarker) {
           var markerId = infoWindow.visibleOnMarker;
@@ -1211,7 +1292,7 @@ angular.module('ngMap', []);
 
   }; // infoWindow
   infoWindow.$inject =
-    ['Attr2MapOptions', '$compile', '$timeout', '$parse', 'NgMap'];
+    ['Attr2MapOptions', '$compile', '$q', '$templateRequest', '$timeout', '$parse', 'NgMap'];
 
   angular.module('ngMap').directive('infoWindow', infoWindow);
 })();
@@ -1310,13 +1391,14 @@ angular.module('ngMap', []);
       restrict: 'E',
       require: ['?^map','?^ngMap'],
 
-      link: function(scope, element, attrs) {
+      link: function(scope, element, attrs, mapController) {
+        mapController = mapController[0] || mapController[1];
         var filtered = parser.filter(attrs);
         var options = parser.getOptions(filtered, {scope: scope});
         var events = parser.getEvents(scope, filtered, events);
 
         void 0;
-        NgMap.getMap().then(function(map) {
+        NgMap.getMap(mapController.map.id).then(function(map) {
           //options
           for (var key in options) {
             var val = options[key];
@@ -1375,20 +1457,28 @@ angular.module('ngMap', []);
 /* global window, document */
 (function() {
   'use strict';
-  var $timeout, $compile, src, savedHtml;
+  var $timeout, $compile, src, savedHtml = [], elements = [];
 
   var preLinkFunc = function(scope, element, attrs) {
     var mapsUrl = attrs.mapLazyLoadParams || attrs.mapLazyLoad;
 
-    window.lazyLoadCallback = function() {
-      void 0;
-      $timeout(function() { /* give some time to load */
-        element.html(savedHtml);
-        $compile(element.contents())(scope);
-      }, 100);
-    };
-
     if(window.google === undefined || window.google.maps === undefined) {
+      elements.push({
+        scope: scope,
+        element: element,
+        savedHtml: savedHtml[elements.length],
+      });
+
+      window.lazyLoadCallback = function() {
+        void 0;
+        $timeout(function() { /* give some time to load */
+          elements.forEach(function(elm) {
+              elm.element.html(elm.savedHtml);
+              $compile(elm.element.contents())(elm.scope);
+          });
+        }, 100);
+      };
+
       var scriptEl = document.createElement('script');
       void 0;
 
@@ -1408,7 +1498,7 @@ angular.module('ngMap', []);
   var compileFunc = function(tElement, tAttrs) {
 
     (!tAttrs.mapLazyLoad) && void 0;
-    savedHtml = tElement.html();
+    savedHtml.push(tElement.html());
     src = tAttrs.mapLazyLoad;
 
     /**
@@ -1543,7 +1633,7 @@ angular.module('ngMap', []);
     return {
       restrict: 'AE',
       controller: '__MapController',
-      conrollerAs: 'ngmap'
+      controllerAs: 'ngmap'
     };
   };
 
@@ -1789,7 +1879,7 @@ angular.module('ngMap', []);
  * @example
  * Example:
  *   <script src="https://maps.googleapis.com/maps/api/js?libraries=places"></script>
- *   <input places-auto-complete types="['geocode']" on-place-changed="myCallback(place)" />
+ *   <input places-auto-complete types="['geocode']" on-place-changed="myCallback(place)" component-restrictions="{country:'au'}"/>
  */
 /* global google */
 (function() {
@@ -1824,8 +1914,14 @@ angular.module('ngMap', []);
           autocomplete.setTypes(optionValue);
         }
       });
+	  
+	  attrs.$observe('componentRestrictions', function (val) {
+		 if (val) {
+		   autocomplete.setComponentRestrictions(scope.$eval(val));
+		 }
+	   });
     };
-
+	
     return {
       restrict: 'A',
       require: '?ngModel',
@@ -1835,7 +1931,6 @@ angular.module('ngMap', []);
 
   placesAutoComplete.$inject = ['Attr2MapOptions', '$timeout'];
   angular.module('ngMap').directive('placesAutoComplete', placesAutoComplete);
-
 })();
 
 /**
@@ -2242,6 +2337,26 @@ angular.module('ngMap', []);
 
 /**
  * @ngdoc filter
+ * @name escape-regex
+ * @description
+ *   Escapes all regex special characters in a string
+ */
+(function() {
+  'use strict';
+
+
+
+  var escapeRegexpFilter = function() {
+    return function(string) {
+			return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+		};
+  };
+
+  angular.module('ngMap').filter('escapeRegexp', escapeRegexpFilter);
+})();
+
+/**
+ * @ngdoc filter
  * @name jsonize
  * @description
  *   Converts json-like string to json string
@@ -2282,374 +2397,415 @@ angular.module('ngMap', []);
  *   Converts tag attributes to options used by google api v3 objects
  */
 /* global google */
-(function() {
-  'use strict';
+(function () {
+    'use strict';
 
-  var isoDateRE = /^(\d{4}\-\d\d\-\d\d([tT][\d:\.]*)?)([zZ]|([+\-])(\d\d):?(\d\d))?$/; // 2015-08-12T06:12:40.858Z
-  var latLongRE = /^[\+\-]?[0-9\.]+,[ ]*\ ?[\+\-]?[0-9\.]+$/; // lat, long
-  var googleLatLongRE = /^([A-Z][a-zA-Z0-9]+)\(([^()]*)\)$/; // LatLng(12, -40)
-  var googleMapObjectFunctionExpRE = /^([A-Z][a-zA-Z0-9]+)\.([A-Z]+)$/; // MayTypeId.HYBRID
-  var googleConstantsRE = /^[A-Z]+$/; // HYBRID
-  var googleOptionsRE = /temperatureUnit|windSpeedUnit|labelColor/;
-  var angularExpRE = /^{{[^{]+}}$/; // {{variable}}
-  var jsonRE = /^\s*[{]\s*[^{]+|^\s*[[]\s*[^[]+/;
+    //i.e. "2015-08-12T06:12:40.858Z"
+    var isoDateRE = /^(\d{4}-\d\d-\d\d([tT][\d:.]*)?)([zZ]|([+\-])(\d\d):?(\d\d))?$/;
+    var latLongRE = /^[+-]?[0-9.]+,[ ]* ?[+-]?[0-9.]+$/; // lat, long
+    var googleLatLongRE = /^([A-Z][a-zA-Z0-9]+)\(([^()]*)\)$/; // LatLng(12, -40)
+    var googleMapObjectFunctionExpRE = /^([A-Z][a-zA-Z0-9]+)\.([A-Z]+)$/; // MayTypeId.HYBRID
+    var googleConstantsRE = /^[A-Z]+$/; // HYBRID
+    var googleOptionsRE = /temperatureUnit|windSpeedUnit|labelColor/;
+    var jsonRE = /^\s*[{]\s*[^{]+|^\s*[[]\s*[^[]+/;
 
-  var Attr2MapOptions = function(
-      $parse, $timeout, $log, NavigatorGeolocation, GeoCoder,
-      camelCaseFilter, jsonizeFilter
-    ) {
+    var Attr2MapOptions = function ($parse, $timeout, $log, $interpolate, NavigatorGeolocation, GeoCoder,
+                                    camelCaseFilter, jsonizeFilter, escapeRegExp) {
 
-    /**
-     * Returns the attributes of an element as hash
-     * @memberof Attr2MapOptions
-     * @param {HTMLElement} el html element
-     * @returns {Hash} attributes
-     */
-    var orgAttributes = function(el) {
-      (el.length > 0) && (el = el[0]);
-      var orgAttributes = {};
-      for (var i=0; i<el.attributes.length; i++) {
-        var attr = el.attributes[i];
-        orgAttributes[attr.name] = attr.value;
-      }
-      return orgAttributes;
-    };
+        var exprStartSymbol = $interpolate.startSymbol();
+        var exprEndSymbol = $interpolate.endSymbol();
+        var angularExpRE = new RegExp('^' + escapeRegExp(exprStartSymbol)); // {{variable}}
+        var startRegExp = new RegExp(escapeRegExp(exprStartSymbol));
+        var endRegExp = new RegExp(escapeRegExp(exprEndSymbol), 'g');
 
-    var getLatLng = function(input) {
-      var output = input;
-      if (input[0].constructor == Array) { // [[1,2],[3,4]]
-        output = input.map(function(el) {
-          return new google.maps.LatLng(el[0], el[1]);
-        });
-      } else if(!isNaN(parseFloat(input[0])) && isFinite(input[0])) {
-        output = new google.maps.LatLng(output[0], output[1]);
-      }
-      return output;
-    };
-
-    var parseOptionValue = function(input, options){
-      var output = input;
-      // 1. Number?
-      output = Number(input);
-      if(!isNaN(output)){
-        return output;
-      }
-      // 1.a lat, long
-      if (latLongRE.test(input)) {
-        input = '['+input+']';
-      }
-      // 2. JSON?
-      if(jsonRE.test(input)){
-        // ignore exception for optimization by the browser
-        // exception should not occur
-        output = JSON.parse(jsonizeFilter(input));
-        var type = typeof output;
-        if (Array.isArray(output)) {
-          // [{a:1}] : not lat/lng ones
-          // [[1,2],[3,4]] or [1,2]
-          if (output[0].constructor !== Object) {
-            output = getLatLng(output);
-          }
-        }
-        // JSON is an object (not array or null)
-        else if (!!output && (type == 'object' || type == 'function')) {
-          // check for nested hashes and convert to Google API options
-          var newOptions = options;
-          newOptions.doNotConverStringToNumber = true;
-          output = getOptions(output, newOptions);
-        }
-        // 3. Google Map Object function Expression. i.e. LatLng(80,-49)
-      } else if (googleLatLongRE.test(input)) {
-        var latLongMatches = input.match(googleLatLongRE);
-        if(latLongMatches.length > 2){
-          var args = JSON.parse(jsonizeFilter('[' + latLongMatches[2] + ']'));
-          output = new (google.maps[latLongMatches[1]].bind.apply(google.maps[latLongMatches[1]], [null].concat(args)));
-        }
-        // 4. Google Map Object constant Expression. i.e. MayTypeId.HYBRID
-      } else if (googleMapObjectFunctionExpRE.test(input)) {
-        var matches = input.match(googleMapObjectFunctionExpRE);
-        if(matches.length > 2){
-          output = google.maps[matches[1]][matches[2]];
-        }
-        // 5. Google Map Object constant Expression. i.e. HYBRID
-      } else if (googleConstantsRE.test(input)) {
-        if(options.key){
-          var capitalizedKey = options.key.charAt(0).toUpperCase() +
-              options.key.slice(1);
-          if (googleOptionsRE.test(options.key)) {
-            capitalizedKey = capitalizedKey.replace(/s$/,'');
-            output = google.maps.weather[capitalizedKey][input];
-          } else {
-            output = google.maps[capitalizedKey][input];
-          }
-        }
-        // 6. Date Object as ISO String
-      } else if (input.match(isoDateRE)) {
-        output = new Date(input);
-        if(isNaN(output.getTime())){
-          output = input;
-        }
-        // 7. evaluate dynamically bound values
-      } else if (angularExpRE.test(input) && options.scope) {
-        output = options.scope.$eval(input.replace(/{{/,'').replace(/}}/g,''));
-      } else {
-        output = input;
-      }
-      return output;
-    };
-
-    var toOptionValue = function(input, options) {
-     var output = parseOptionValue(input, options);
-
-      // convert output more for center and position
-      if (
-        (options.key == 'center' || options.key == 'center') &&
-        output instanceof Array
-      ) {
-        output = new google.maps.LatLng(output[0], output[1]);
-      }
-
-      // convert output more for shape bounds
-      if (options.key == 'bounds' && output instanceof Array) {
-        output = new google.maps.LatLngBounds(output[0], output[1]);
-      }
-
-      // convert output more for shape icons
-      if (options.key == 'icons' && output instanceof Array) {
-
-        for (var i=0; i<output.length; i++) {
-          var el = output[i];
-          if (el.icon.path.match(/^[A-Z_]+$/)) {
-            el.icon.path =  google.maps.SymbolPath[el.icon.path];
-          }
-        }
-      }
-
-      // convert output more for marker icon
-      if (options.key == 'icon' && output instanceof Object) {
-        if ((''+output.path).match(/^[A-Z_]+$/)) {
-          output.path = google.maps.SymbolPath[output.path];
-        }
-        for (var key in output) { //jshint ignore:line
-          var arr = output[key];
-          if (key == 'anchor' || key == 'origin' || key == 'labelOrigin') {
-            output[key] = new google.maps.Point(arr[0], arr[1]);
-          } else if (key == 'size' || key == 'scaledSize') {
-            output[key] = new google.maps.Size(arr[0], arr[1]);
-          }
-        }
-      }
-
-      return output;
-    };
-
-    var getAttrsToObserve = function(attrs) {
-      var attrsToObserve = [];
-
-      if (!attrs.noWatcher) {
-        for (var attrName in attrs) { //jshint ignore:line
-          var attrValue = attrs[attrName];
-          if (attrValue && attrValue.match(/\{\{.*\}\}/)) { // if attr value is {{..}}
-            attrsToObserve.push(camelCaseFilter(attrName));
-          }
-        }
-      }
-
-      return attrsToObserve;
-    };
-
-    /**
-     * filters attributes by skipping angularjs methods $.. $$..
-     * @memberof Attr2MapOptions
-     * @param {Hash} attrs tag attributes
-     * @returns {Hash} filterd attributes
-     */
-    var filter = function(attrs) {
-      var options = {};
-      for(var key in attrs) {
-        if (key.match(/^\$/) || key.match(/^ng[A-Z]/)) {
-          void(0);
-        } else {
-          options[key] = attrs[key];
-        }
-      }
-      return options;
-    };
-
-    /**
-     * converts attributes hash to Google Maps API v3 options
-     * ```
-     *  . converts numbers to number
-     *  . converts class-like string to google maps instance
-     *    i.e. `LatLng(1,1)` to `new google.maps.LatLng(1,1)`
-     *  . converts constant-like string to google maps constant
-     *    i.e. `MapTypeId.HYBRID` to `google.maps.MapTypeId.HYBRID`
-     *    i.e. `HYBRID"` to `google.maps.MapTypeId.HYBRID`
-     * ```
-     * @memberof Attr2MapOptions
-     * @param {Hash} attrs tag attributes
-     * @param {Hash} options
-     * @returns {Hash} options converted attributess
-     */
-    var getOptions = function(attrs, params) {
-      params = params || {};
-      var options = {};
-      for(var key in attrs) {
-        if (attrs[key] || attrs[key] === 0) {
-          if (key.match(/^on[A-Z]/)) { //skip events, i.e. on-click
-            continue;
-          } else if (key.match(/ControlOptions$/)) { // skip controlOptions
-            continue;
-          } else {
-            // nested conversions need to be typechecked
-            // (non-strings are fully converted)
-            if (typeof attrs[key] !== 'string') {
-              options[key] = attrs[key];
-            } else {
-              if (params.doNotConverStringToNumber &&
-                attrs[key].match(/^[0-9]+$/)
-              ) {
-                options[key] = attrs[key];
-              } else {
-                options[key] = toOptionValue(attrs[key], {key: key, scope: params.scope});
-              }
+        /**
+         * Returns the attributes of an element as hash
+         * @memberof Attr2MapOptions
+         * @param {HTMLElement} el html element
+         * @returns {*} attributes
+         */
+        var orgAttributes = function (el) {
+            (el.length > 0) && (el = el[0]);
+            var orgAttributes = {};
+            for (var i = 0; i < el.attributes.length; i++) {
+                var attr = el.attributes[i];
+                orgAttributes[attr.name] = attr.value;
             }
-          }
-        } // if (attrs[key])
-      } // for(var key in attrs)
-      return options;
-    };
-
-    /**
-     * converts attributes hash to scope-specific event function
-     * @memberof Attr2MapOptions
-     * @param {scope} scope angularjs scope
-     * @param {Hash} attrs tag attributes
-     * @returns {Hash} events converted events
-     */
-    var getEvents = function(scope, attrs) {
-      var events = {};
-      var toLowercaseFunc = function($1){
-        return '_'+$1.toLowerCase();
-      };
-      var EventFunc = function(attrValue) {
-        // funcName(argsStr)
-        var matches = attrValue.match(/([^\(]+)\(([^\)]*)\)/);
-        var funcName = matches[1];
-        var argsStr = matches[2].replace(/event[ ,]*/,'');  //remove string 'event'
-        var argsExpr = $parse('['+argsStr+']'); //for perf when triggering event
-        return function(event) {
-          var args = argsExpr(scope); //get args here to pass updated model values
-          function index(obj,i) {return obj[i];}
-          var f = funcName.split('.').reduce(index, scope);
-          f && f.apply(this, [event].concat(args));
-          $timeout( function() {
-            scope.$apply();
-          });
+            return orgAttributes;
         };
-      };
 
-      for(var key in attrs) {
-        if (attrs[key]) {
-          if (!key.match(/^on[A-Z]/)) { //skip if not events
-            continue;
-          }
-
-          //get event name as underscored. i.e. zoom_changed
-          var eventName = key.replace(/^on/,'');
-          eventName = eventName.charAt(0).toLowerCase() + eventName.slice(1);
-          eventName = eventName.replace(/([A-Z])/g, toLowercaseFunc);
-
-          var attrValue = attrs[key];
-          events[eventName] = new EventFunc(attrValue);
-        }
-      }
-      return events;
-    };
-
-    /**
-     * control means map controls, i.e streetview, pan, etc, not a general control
-     * @memberof Attr2MapOptions
-     * @param {Hash} filtered filtered tag attributes
-     * @returns {Hash} Google Map options
-     */
-    var getControlOptions = function(filtered) {
-      var controlOptions = {};
-      if (typeof filtered != 'object') {
-        return false;
-      }
-
-      for (var attr in filtered) {
-        if (filtered[attr]) {
-          if (!attr.match(/(.*)ControlOptions$/)) {
-            continue; // if not controlOptions, skip it
-          }
-
-          //change invalid json to valid one, i.e. {foo:1} to {"foo": 1}
-          var orgValue = filtered[attr];
-          var newValue = orgValue.replace(/'/g, '"');
-          newValue = newValue.replace(/([^"]+)|("[^"]+")/g, function($0, $1, $2) {
-            if ($1) {
-              return $1.replace(/([a-zA-Z0-9]+?):/g, '"$1":');
-            } else {
-              return $2;
-            }
-          });
-          try {
-            var options = JSON.parse(newValue);
-            for (var key in options) { //assign the right values
-              if (options[key]) {
-                var value = options[key];
-                if (typeof value === 'string') {
-                  value = value.toUpperCase();
-                } else if (key === 'mapTypeIds') {
-                  value = value.map( function(str) {
-                    if (str.match(/^[A-Z]+$/)) { // if constant
-                      return google.maps.MapTypeId[str.toUpperCase()];
-                    } else { // else, custom map-type
-                      return str;
+        var getLatLng = function (input) {
+            var output = input;
+            if (input[0].constructor == Array) {
+                if ((input[0][0].constructor == Array && input[0][0].length == 2) || input[0][0].constructor == Object) {
+                    var preoutput;
+                    var outputArray = [];
+                    for (var i = 0; i < input.length; i++) {
+                        preoutput = input[i].map(function (el) {
+                            return new google.maps.LatLng(el[0], el[1]);
+                        });
+                        outputArray.push(preoutput);
                     }
-                  });
-                }
-
-                if (key === 'style') {
-                  var str = attr.charAt(0).toUpperCase() + attr.slice(1);
-                  var objName = str.replace(/Options$/,'')+'Style';
-                  options[key] = google.maps[objName][value];
-                } else if (key === 'position') {
-                  options[key] = google.maps.ControlPosition[value];
+                    output = outputArray;
                 } else {
-                  options[key] = value;
+                    output = input.map(function (el) {
+                        return new google.maps.LatLng(el[0], el[1]);
+                    });
                 }
-              }
+            } else {
+                if (!isNaN(parseFloat(input[0])) && isFinite(input[0])) {
+                    output = new google.maps.LatLng(output[0], output[1]);
+                }
             }
-            controlOptions[attr] = options;
-          } catch (e) {
-            void 0;
-          }
-        }
-      } // for
+            return output;
+        };
 
-      return controlOptions;
+        var parseOptionValue = function (input, options) {
+            var output = input;
+            // 1. Number?
+            output = Number(input);
+            if (!isNaN(output)) {
+                return output;
+            }
+            // 1.a lat, long
+            if (latLongRE.test(input)) {
+                input = '[' + input + ']';
+            }
+            // 2. JSON?
+            if (jsonRE.test(input)) {
+                // ignore exception for optimization by the browser
+                // exception should not occur
+                output = JSON.parse(jsonizeFilter(input));
+                var type = typeof output;
+                if (Array.isArray(output)) {
+                    // [{a:1}] : not lat/lng ones
+                    // [[1,2],[3,4]] or [1,2]
+                    if (output[0].constructor !== Object) {
+                        output = getLatLng(output);
+                    }
+                }
+                // JSON is an object (not array or null)
+                else {
+                    if (!!output && (type == 'object' || type == 'function')) {
+                        // check for nested hashes and convert to Google API options
+                        var newOptions = options;
+                        newOptions.doNotConverStringToNumber = true;
+                        output = getOptions(output, newOptions);
+                    }
+                }
+                // 3. Google Map Object function Expression. i.e. LatLng(80,-49)
+            } else {
+                if (googleLatLongRE.test(input)) {
+                    var latLongMatches = input.match(googleLatLongRE);
+                    if (latLongMatches.length > 2) {
+                        var args = JSON.parse(jsonizeFilter('[' + latLongMatches[2] + ']'));
+                        output = new (google.maps[latLongMatches[1]].bind.apply(google.maps[latLongMatches[1]], [null].concat(args)));
+                    }
+                    // 4. Google Map Object constant Expression. i.e. MayTypeId.HYBRID
+                } else {
+                    if (googleMapObjectFunctionExpRE.test(input)) {
+                        var matches = input.match(googleMapObjectFunctionExpRE);
+                        if (matches.length > 2) {
+                            output = google.maps[matches[1]][matches[2]];
+                        }
+                        // 5. Google Map Object constant Expression. i.e. HYBRID
+                    } else {
+                        if (googleConstantsRE.test(input)) {
+                            if (options.key) {
+                                var capitalizedKey = options.key.charAt(0).toUpperCase() +
+                                    options.key.slice(1);
+                                if (googleOptionsRE.test(options.key)) {
+                                    capitalizedKey = capitalizedKey.replace(/s$/, '');
+                                    output = google.maps.weather[capitalizedKey][input];
+                                } else {
+                                    output = google.maps[capitalizedKey][input];
+                                }
+                            }
+                            // 6. Date Object as ISO String
+                        } else {
+                            if (input.match(isoDateRE)) {
+                                output = new Date(input);
+                                if (isNaN(output.getTime())) {
+                                    output = input;
+                                }
+                                // 7. evaluate dynamically bound values
+                            } else {
+                                if (angularExpRE.test(input) && options.scope) {
+                                    output = options.scope.$eval(input.replace(startRegExp, '').replace(endRegExp, ''));
+                                } else {
+                                    output = input;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return output;
+        };
+
+        var toOptionValue = function (input, options) {
+            var output = parseOptionValue(input, options);
+
+            // convert output more for center and position
+            if (
+                (options.key == 'center' || options.key == 'position') &&
+                output instanceof Array
+            ) {
+                output = new google.maps.LatLng(output[0], output[1]);
+            }
+
+            // convert output more for shape bounds
+            if (options.key == 'bounds' && output instanceof Array) {
+                output = new google.maps.LatLngBounds(output[0], output[1]);
+            }
+
+            // convert output more for shape icons
+            if (options.key == 'icons' && output instanceof Array) {
+
+                for (var i = 0; i < output.length; i++) {
+                    var el = output[i];
+                    if (el.icon.path.match(/^[A-Z_]+$/)) {
+                        el.icon.path = google.maps.SymbolPath[el.icon.path];
+                    }
+                }
+            }
+
+            // convert output more for marker icon
+            if (options.key == 'icon' && output instanceof Object) {
+                if (('' + output.path).match(/^[A-Z_]+$/)) {
+                    output.path = google.maps.SymbolPath[output.path];
+                }
+                for (var key in output) { //jshint ignore:line
+                    var arr = output[key];
+                    if (key == 'anchor' || key == 'origin' || key == 'labelOrigin') {
+                        output[key] = new google.maps.Point(arr[0], arr[1]);
+                    } else {
+                        if (key == 'size' || key == 'scaledSize') {
+                            output[key] = new google.maps.Size(arr[0], arr[1]);
+                        }
+                    }
+                }
+            }
+
+            return output;
+        };
+
+        var getAttrsToObserve = function (attrs) {
+            var attrsToObserve = [];
+            var exprRegExp = new RegExp(escapeRegExp(exprStartSymbol) + '.*' + escapeRegExp(exprEndSymbol), 'g');
+
+            if (!attrs.noWatcher) {
+                for (var attrName in attrs) {
+                    if (attrs.hasOwnProperty(attrName)) {
+                        var attrValue = attrs[attrName];
+                        if (attrValue && attrValue.match(exprRegExp)) { // if attr value is {{..}}
+                            attrsToObserve.push(camelCaseFilter(attrName));
+                        }
+                    }
+                }
+            }
+
+            return attrsToObserve;
+        };
+
+        /**
+         * filters attributes by skipping angularjs methods $.. $$..
+         * @memberof Attr2MapOptions
+         * @param {*} attrs tag attributes
+         * @returns {*} filterd attributes
+         */
+        var filter = function (attrs) {
+            var options = {};
+            for (var key in attrs) {
+                if (attrs.hasOwnProperty(key)) {
+                    if (key.match(/^\$/) || key.match(/^ng[A-Z]/)) {
+                        void(0);
+                    } else {
+                        options[key] = attrs[key];
+                    }
+                }
+            }
+            return options;
+        };
+
+        /**
+         * converts attributes hash to Google Maps API v3 options
+         * ```
+         *  . converts numbers to number
+         *  . converts class-like string to google maps instance
+         *    i.e. `LatLng(1,1)` to `new google.maps.LatLng(1,1)`
+         *  . converts constant-like string to google maps constant
+         *    i.e. `MapTypeId.HYBRID` to `google.maps.MapTypeId.HYBRID`
+         *    i.e. `HYBRID"` to `google.maps.MapTypeId.HYBRID`
+         * ```
+         * @memberof Attr2MapOptions
+         * @param {*} attrs tag attributes
+         * @param {*} params
+         * @returns {*} options converted attributess
+         */
+        var getOptions = function (attrs, params) {
+            params = params || {};
+            var options = {};
+            for (var key in attrs) {
+                if (attrs.hasOwnProperty(key) && (attrs[key] || attrs[key] === 0)) {
+                    if (!key.match(/^on[A-Z]/) && !key.match(/ControlOptions$/)) { // skip controlOptions
+                        // nested conversions need to be typechecked
+                        // (non-strings are fully converted)
+                        if (typeof attrs[key] !== 'string') {
+                            options[key] = attrs[key];
+                        } else {
+                            if (params.doNotConverStringToNumber &&
+                                attrs[key].match(/^[0-9]+$/)
+                            ) {
+                                options[key] = attrs[key];
+                            } else {
+                                options[key] = toOptionValue(attrs[key], {
+                                    key:   key,
+                                    scope: params.scope
+                                });
+                            }
+                        }
+                    }
+                } // if (attrs[key])
+            } // for(var key in attrs)
+            return options;
+        };
+
+        /**
+         * converts attributes hash to scope-specific event function
+         * @memberof Attr2MapOptions
+         * @param {scope} scope angularjs scope
+         * @param {*} attrs tag attributes
+         * @returns {*} events converted events
+         */
+        var getEvents = function (scope, attrs) {
+            var events = {};
+            var toLowercaseFunc = function ($1) {
+                return '_' + $1.toLowerCase();
+            };
+            var EventFunc = function (attrValue) {
+                // funcName(argsStr)
+                var matches = attrValue.match(/([^(]+)\(([^)]*)\)/);
+                var funcName = matches[1];
+                var argsStr = matches[2].replace(/event[ ,]*/, '');  //remove string 'event'
+                var argsExpr = $parse('[' + argsStr + ']'); //for perf when triggering event
+                return function (event) {
+                    var args = argsExpr(scope); //get args here to pass updated model values
+                    function index(obj, i) {return obj[i];}
+
+                    var f = funcName.split('.').reduce(index, scope);
+                    f && f.apply(this, [event].concat(args));
+                    $timeout(function () {
+                        scope.$apply();
+                    });
+                };
+            };
+
+            for (var key in attrs) {
+                if (attrs.hasOwnProperty(key) && attrs[key]) {
+                    if (!key.match(/^on[A-Z]/)) { //skip if not events
+                        continue;
+                    }
+
+                    //get event name as underscored. i.e. zoom_changed
+                    var eventName = key.replace(/^on/, '');
+                    eventName = eventName.charAt(0).toLowerCase() + eventName.slice(1);
+                    eventName = eventName.replace(/([A-Z])/g, toLowercaseFunc);
+
+                    var attrValue = attrs[key];
+                    events[eventName] = new EventFunc(attrValue);
+                }
+            }
+            return events;
+        };
+
+        /**
+         * control means map controls, i.e streetview, pan, etc, not a general control
+         * @memberof Attr2MapOptions
+         * @param {*} filtered filtered tag attributes
+         * @returns {*} Google Map options
+         */
+        var getControlOptions = function (filtered) {
+            var controlOptions = {};
+            if (typeof filtered != 'object') {
+                return false;
+            }
+
+            for (var attr in filtered) {
+                if (filtered.hasOwnProperty(attr) && filtered[attr]) {
+                    if (!attr.match(/(.*)ControlOptions$/)) {
+                        continue; // if not controlOptions, skip it
+                    }
+
+                    //change invalid json to valid one, i.e. {foo:1} to {"foo": 1}
+                    var orgValue = filtered[attr];
+                    var newValue = orgValue.replace(/'/g, '"');
+                    newValue = newValue.replace(/([^"]+)|("[^"]+")/g, function ($0, $1, $2) {
+                        if ($1) {
+                            return $1.replace(/([a-zA-Z0-9]+?):/g, '"$1":');
+                        } else {
+                            return $2;
+                        }
+                    });
+                    try {
+                        var options = JSON.parse(newValue);
+                        for (var key in options) { //assign the right values
+                            if (options.hasOwnProperty(key) && options[key]) {
+                                var value = options[key];
+                                if (typeof value === 'string') {
+                                    value = value.toUpperCase();
+                                } else {
+                                    if (key === 'mapTypeIds') {
+                                        value = value.map(function (str) {
+                                            if (str.match(/^[A-Z]+$/)) { // if constant
+                                                return google.maps.MapTypeId[str.toUpperCase()];
+                                            } else { // else, custom map-type
+                                                return str;
+                                            }
+                                        });
+                                    }
+                                }
+
+                                if (key === 'style') {
+                                    var str = attr.charAt(0).toUpperCase() + attr.slice(1);
+                                    var objName = str.replace(/Options$/, '') + 'Style';
+                                    options[key] = google.maps[objName][value];
+                                } else {
+                                    if (key === 'position') {
+                                        options[key] = google.maps.ControlPosition[value];
+                                    } else {
+                                        options[key] = value;
+                                    }
+                                }
+                            }
+                        }
+                        controlOptions[attr] = options;
+                    } catch (e) {
+                        void 0;
+                    }
+                }
+            } // for
+
+            return controlOptions;
+        };
+
+        return {
+            filter:            filter,
+            getOptions:        getOptions,
+            getEvents:         getEvents,
+            getControlOptions: getControlOptions,
+            toOptionValue:     toOptionValue,
+            getAttrsToObserve: getAttrsToObserve,
+            orgAttributes:     orgAttributes
+        }; // return
+
     };
+    Attr2MapOptions.$inject = [
+        '$parse', '$timeout', '$log', '$interpolate', 'NavigatorGeolocation', 'GeoCoder',
+        'camelCaseFilter', 'jsonizeFilter', 'escapeRegexpFilter'
+    ];
 
-    return {
-      filter: filter,
-      getOptions: getOptions,
-      getEvents: getEvents,
-      getControlOptions: getControlOptions,
-      toOptionValue: toOptionValue,
-      getAttrsToObserve: getAttrsToObserve,
-      orgAttributes: orgAttributes
-    }; // return
-
-  };
-  Attr2MapOptions.$inject= [
-    '$parse', '$timeout', '$log', 'NavigatorGeolocation', 'GeoCoder',
-    'camelCaseFilter', 'jsonizeFilter'
-  ];
-
-  angular.module('ngMap').service('Attr2MapOptions', Attr2MapOptions);
+    angular.module('ngMap').service('Attr2MapOptions', Attr2MapOptions);
 })();
 
 /**
@@ -2791,10 +2947,27 @@ angular.module('ngMap', []);
     return map;
   };
 
-  var find = function(el) { //jshint ignore:line
+  var findById = function(el, id) {
     var notInUseMap;
     for (var i=0; i<mapInstances.length; i++) {
       var map = mapInstances[i];
+      if (map.id == id && !map.inUse) {
+        var mapDiv = map.getDiv();
+        el.appendChild(mapDiv);
+        notInUseMap = map;
+        break;
+      }
+    }
+    return notInUseMap;
+  };
+
+  var findUnused = function(el) { //jshint ignore:line
+    var notInUseMap;
+    for (var i=0; i<mapInstances.length; i++) {
+      var map = mapInstances[i];
+      if (map.id) {
+        continue;
+      }
       if (!map.inUse) {
         var mapDiv = map.getDiv();
         el.appendChild(mapDiv);
@@ -2812,7 +2985,7 @@ angular.module('ngMap', []);
    * @return map instance for the given element
    */
   var getMapInstance = function(el) {
-    var map = find(el);
+    var map = findById(el, el.id) || findUnused(el);
     if (!map) {
       map = add(el);
     } else {
@@ -2847,6 +3020,20 @@ angular.module('ngMap', []);
     }
     mapInstances = [];
   };
+  
+  /**
+   * @memberof NgMapPool
+   * @function deleteMapInstance
+   * @desc delete a mapInstance
+   */
+  var deleteMapInstance= function(mapId) {
+	  for( var i=0; i<mapInstances.length; i++ ) {
+		  if( (mapInstances[i] !== null) && (mapInstances[i].id == mapId)) {
+			  mapInstances[i]= null;
+			  mapInstances.splice( i, 1 );
+		  }
+	  }
+  };
 
   var NgMapPool = function(_$document_, _$window_, _$timeout_) {
     $document = _$document_[0], $window = _$window_, $timeout = _$timeout_;
@@ -2855,9 +3042,11 @@ angular.module('ngMap', []);
 	  mapInstances: mapInstances,
       resetMapInstances: resetMapInstances,
       getMapInstance: getMapInstance,
-      returnMapInstance: returnMapInstance
+      returnMapInstance: returnMapInstance,
+      deleteMapInstance: deleteMapInstance
     };
   };
+
   NgMapPool.$inject = [ '$document', '$window', '$timeout'];
 
   angular.module('ngMap').factory('NgMapPool', NgMapPool);
@@ -2873,7 +3062,7 @@ angular.module('ngMap', []);
 (function() {
   'use strict';
   var $window, $document, $q;
-  var NavigatorGeolocation, Attr2MapOptions, GeoCoder, camelCaseFilter;
+  var NavigatorGeolocation, Attr2MapOptions, GeoCoder, camelCaseFilter, NgMapPool;
 
   var mapControllers = {};
 
@@ -2907,15 +3096,15 @@ angular.module('ngMap', []);
   /**
    * @memberof NgMap
    * @function getMap
-   * @param {Hash} options optional, e.g., {id: 'foo, timeout: 5000}
+   * @param {String} optional, id e.g., 'foo'
    * @returns promise
    */
-  var getMap = function(options) {
-    options = options || {};
-    var deferred = $q.defer();
+  var getMap = function(id) {
+    id = typeof id === 'object' ? id.id : id;
+    id = id || 0;
 
-    var id = options.id || 0;
-    var timeout = options.timeout || 2000;
+    var deferred = $q.defer();
+    var timeout = 2000;
 
     function waitForMap(timeElapsed){
       if(mapControllers[id]){
@@ -2955,9 +3144,10 @@ angular.module('ngMap', []);
     var len = Object.keys(mapControllers).length - 1;
     var mapId = mapCtrl.map.id || len;
     if (mapCtrl.map) {
-      for (var eventName in mapCtrl.mapEvents) {
+      for (var eventName in mapCtrl.eventListeners) {
         void 0;
-        google.maps.event.clearListeners(mapCtrl.map, eventName);
+        var listener = mapCtrl.eventListeners[eventName];
+        google.maps.event.removeListener(listener);
       }
       if (mapCtrl.map.controls) {
         mapCtrl.map.controls.forEach(function(ctrl) {
@@ -2972,6 +3162,8 @@ angular.module('ngMap', []);
         mapCtrl.deleteObject('heatmapLayers', mapCtrl.map.heatmapLayers[layer]);
       });
     }
+
+    NgMapPool.deleteMapInstance(mapId);
 
     delete mapControllers[mapId];
   };
@@ -3006,6 +3198,14 @@ angular.module('ngMap', []);
           deferred.reject(error);
         }
       );
+      // var geocoder = new google.maps.Geocoder();
+      // geocoder.geocode(options, function (results, status) {
+      //   if (status == google.maps.GeocoderStatus.OK) {
+      //     deferred.resolve(results);
+      //   } else {
+      //     deferred.reject(status);
+      //   }
+      // });
     }
 
     return deferred.promise;
@@ -3085,7 +3285,7 @@ angular.module('ngMap', []);
     var NgMap = function(
         _$window_, _$document_, _$q_,
         _NavigatorGeolocation_, _Attr2MapOptions_,
-        _GeoCoder_, _camelCaseFilter_
+        _GeoCoder_, _camelCaseFilter_, _NgMapPool_
       ) {
       $window = _$window_;
       $document = _$document_[0];
@@ -3094,6 +3294,7 @@ angular.module('ngMap', []);
       Attr2MapOptions = _Attr2MapOptions_;
       GeoCoder = _GeoCoder_;
       camelCaseFilter = _camelCaseFilter_;
+      NgMapPool = _NgMapPool_;
 
       return {
         defaultOptions: defaultOptions,
@@ -3109,7 +3310,7 @@ angular.module('ngMap', []);
     NgMap.$inject = [
       '$window', '$document', '$q',
       'NavigatorGeolocation', 'Attr2MapOptions',
-      'GeoCoder', 'camelCaseFilter'
+      'GeoCoder', 'camelCaseFilter', 'NgMapPool'
     ];
 
     this.$get = NgMap;
@@ -3186,3 +3387,6 @@ angular.module('ngMap', []);
 
   angular.module('ngMap').service('StreetView', StreetView);
 })();
+
+return 'ngMap';
+}));

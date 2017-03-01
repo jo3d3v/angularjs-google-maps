@@ -135,6 +135,10 @@
     "path": "testapp/infowindow-simple.html",
     "title": null
   },
+  "infowindow-template.html": {
+    "path": "testapp/infowindow-template.html",
+    "title": null
+  },
   "infowindow_compile.html": {
     "path": "testapp/infowindow_compile.html",
     "title": null
@@ -197,10 +201,6 @@
   },
   "layer-georss.html": {
     "path": "testapp/layer-georss.html",
-    "title": null
-  },
-  "layer-heatmap-http.html": {
-    "path": "testapp/layer-heatmap-http.html",
     "title": null
   },
   "layer-heatmap.html": {
@@ -553,6 +553,10 @@
   },
   "ui-router.html": {
     "path": "testapp/ui-router.html",
+    "title": "AngularJS: UI-Router Quick Start"
+  },
+  "ui-router2.html": {
+    "path": "testapp/ui-router2.html",
     "title": "AngularJS: UI-Router Quick Start"
   },
   "user-editable-shapes.html": {

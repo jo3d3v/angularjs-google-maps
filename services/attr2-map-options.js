@@ -8,19 +8,17 @@
 (function() {
   'use strict';
 
-  var isoDateRE = /^(\d{4}\-\d\d\-\d\d([tT][\d:\.]*)?)([zZ]|([+\-])(\d\d):?(\d\d))?$/; // 2015-08-12T06:12:40.858Z
-  var latLongRE = /^[\+\-]?[0-9\.]+,[ ]*\ ?[\+\-]?[0-9\.]+$/; // lat, long
-  var googleLatLongRE = /^([A-Z][a-zA-Z0-9]+)\(([^()]*)\)$/; // LatLng(12, -40)
-  var googleMapObjectFunctionExpRE = /^([A-Z][a-zA-Z0-9]+)\.([A-Z]+)$/; // MayTypeId.HYBRID
-  var googleConstantsRE = /^[A-Z]+$/; // HYBRID
-  var googleOptionsRE = /temperatureUnit|windSpeedUnit|labelColor/;
-  var angularExpRE = /^{{[^{]+}}$/; // {{variable}}
-  var jsonRE = /^\s*[{]\s*[^{]+|^\s*[[]\s*[^[]+/;
+  //i.e. "2015-08-12T06:12:40.858Z"
+  var isoDateRE =
+    /^(\d{4}\-\d\d\-\d\d([tT][\d:\.]*)?)([zZ]|([+\-])(\d\d):?(\d\d))?$/;
 
   var Attr2MapOptions = function(
-      $parse, $timeout, $log, NavigatorGeolocation, GeoCoder,
-      camelCaseFilter, jsonizeFilter
+      $parse, $timeout, $log, $interpolate, NavigatorGeolocation, GeoCoder,
+      camelCaseFilter, jsonizeFilter, escapeRegExp
     ) {
+
+    var exprStartSymbol = $interpolate.startSymbol();
+    var exprEndSymbol = $interpolate.endSymbol();
 
     /**
      * Returns the attributes of an element as hash
@@ -38,13 +36,33 @@
       return orgAttributes;
     };
 
+    var getJSON = function(input) {
+      var re =/^[\+\-]?[0-9\.]+,[ ]*\ ?[\+\-]?[0-9\.]+$/; //lat,lng
+      if (input.match(re)) {
+        input = "["+input+"]";
+      }
+      return JSON.parse(jsonizeFilter(input));
+    };
+    
     var getLatLng = function(input) {
       var output = input;
-      if (input[0].constructor == Array) { // [[1,2],[3,4]]
-        output = input.map(function(el) {
-          return new google.maps.LatLng(el[0], el[1]);
-        });
-      } else if(!isNaN(parseFloat(input[0])) && isFinite(input[0])) {
+      if (input[0].constructor == Array) { 
+        if ((input[0][0].constructor == Array && input[0][0].length == 2) || input[0][0].constructor == Object) {
+            var preoutput;
+            var outputArray = [];
+            for (var i = 0; i < input.length; i++) {
+                preoutput = input[i].map(function(el){
+                    return new google.maps.LatLng(el[0], el[1]);
+                });
+                outputArray.push(preoutput);
+            }
+            output = outputArray;
+        } else {
+            output = input.map(function(el) {
+                return new google.maps.LatLng(el[0], el[1]);
+            });
+        }
+      } else if (!isNaN(parseFloat(input[0])) && isFinite(input[0])) {
         output = new google.maps.LatLng(output[0], output[1]);
       }
       return output;
@@ -126,7 +144,7 @@
 
       // convert output more for center and position
       if (
-        (options.key == 'center' || options.key == 'center') &&
+        (options.key == 'center' || options.key == 'position') &&
         output instanceof Array
       ) {
         output = new google.maps.LatLng(output[0], output[1]);
@@ -168,11 +186,12 @@
 
     var getAttrsToObserve = function(attrs) {
       var attrsToObserve = [];
+      var exprRegExp = new RegExp(escapeRegExp(exprStartSymbol) + '.*' + escapeRegExp(exprEndSymbol), 'g');
 
       if (!attrs.noWatcher) {
         for (var attrName in attrs) { //jshint ignore:line
           var attrValue = attrs[attrName];
-          if (attrValue && attrValue.match(/\{\{.*\}\}/)) { // if attr value is {{..}}
+          if (attrValue && attrValue.match(exprRegExp)) { // if attr value is {{..}}
             attrsToObserve.push(camelCaseFilter(attrName));
           }
         }
@@ -368,8 +387,8 @@
 
   };
   Attr2MapOptions.$inject= [
-    '$parse', '$timeout', '$log', 'NavigatorGeolocation', 'GeoCoder',
-    'camelCaseFilter', 'jsonizeFilter'
+    '$parse', '$timeout', '$log', '$interpolate', 'NavigatorGeolocation', 'GeoCoder',
+    'camelCaseFilter', 'jsonizeFilter', 'escapeRegexpFilter'
   ];
 
   angular.module('ngMap').service('Attr2MapOptions', Attr2MapOptions);
