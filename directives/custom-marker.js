@@ -73,7 +73,7 @@
                         return;
                     }
                     var offsetX = _this.el.hasOwnProperty('offsetX') ? _this.offsetX : 0;
-                    var offsetY = _this.el.hasOwnProperty('offsetY') ? _this.offsetX : 0;
+                    var offsetY = _this.el.hasOwnProperty('offsetY') ? _this.offsetY : 0;
                     var posPixel = _this.getProjection().fromLatLngToDivPixel(_this.position);
                     var x = Math.round(posPixel.x - offsetX);
                     var y = Math.round(posPixel.y - offsetY);
